@@ -4,6 +4,15 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 
+
+### Kubernetes ###
+kubeconfig.yaml
+kubeconfig.example
+kubeconfig.json
+kubeconfig.yml
+kubeconfig.yaml.example
+kubeconfig.yaml.example
+
 ### IntelliJ IDEA ###
 .idea/modules.xml
 .idea/jarRepositories.xml

@@ -1,4 +1,4 @@
-package iaas.dto.response;
+package caas.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.annotation.Nullable;

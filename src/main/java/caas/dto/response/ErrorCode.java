@@ -1,4 +1,4 @@
-package iaas.dto.response;
+package caas.dto.response;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;

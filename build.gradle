@@ -1,17 +1,65 @@
 plugins {
     id 'java'
+    id 'org.springframework.boot' version '3.2.0' // Spring Boot 버전
+    id 'io.spring.dependency-management' version '1.1.4'
 }
 
 group = 'fast-cloud'
 version = '1.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = '17' // Java 17
+}
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+}
 
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    testImplementation platform('org.junit:junit-bom:5.10.0')
-    testImplementation 'org.junit.jupiter:junit-jupiter'
+    // ----------------------------------------------------
+    // Core Web & API Communication
+    // ----------------------------------------------------
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    // 비동기 처리를 위한 WebFlux (선택적이지만 API 호출 시 유용)
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
+    // ----------------------------------------------------
+    // Kubernetes SDK
+    // ----------------------------------------------------
+    // Kubernetes 공식 Java 클라이언트 SDK
+    implementation 'io.kubernetes:client-java:20.0.1' // 2025년 11월 기준 최신 안정 버전
+
+    // ----------------------------------------------------
+    // Database Connectivity & Security
+    // ----------------------------------------------------
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    // (수정 완료) 올바른 MySQL 드라이버 좌표
+    runtimeOnly 'com.mysql:mysql-connector-j'
+
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+
+    // ----------------------------------------------------
+    // Monitoring & Operations
+    // ----------------------------------------------------
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
+    // ----------------------------------------------------
+    // Utilities & Development
+    // ----------------------------------------------------
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+
+    // Testing
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 
 test {
