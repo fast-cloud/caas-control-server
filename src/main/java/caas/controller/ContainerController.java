@@ -27,9 +27,8 @@ public class ContainerController {
 	}
 
 	@GetMapping
-	public ApiResponseDto<ContainerListResponseDto> getContainers(
-			@RequestParam String ownerUserId) {
-		ContainerListResponseDto response = containerService.getContainers(ownerUserId);
+	public ApiResponseDto<ContainerListResponseDto> getContainers() {
+		ContainerListResponseDto response = containerService.getContainers();
 		return ApiResponseDto.success(SuccessCode.CONTAINER_LIST_SUCCESS, response);
 	}
     

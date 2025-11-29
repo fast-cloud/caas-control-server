@@ -32,7 +32,7 @@ public class ContainerService {
 	private final ApplicationRepository applicationRepository;
 	private final ConfigRepository configRepository;
 	private static final String DEFAULT_NAMESPACE = "default";
-	private static final String DEFAULT_OWNER_USER_ID = "system";
+	private static final String DEFAULT_OWNER_USER_ID = "1";
 
 	@Value("${kubernetes.ingress.base-domain}")
 	private String baseDomain;
@@ -191,9 +191,9 @@ public class ContainerService {
 		log.info("Ingress created: {} with host: {} -> Service: {}:{}", ingressName, host, serviceName, servicePort);
 	}
 
-	public ContainerListResponseDto getContainers(String ownerUserId) {
-		// DB에서 사용자의 Application 목록 조회
-		List<Application> applications = applicationRepository.findByOwnerUserId(ownerUserId);
+	public ContainerListResponseDto getContainers() {
+		// DB에서 사용자의 Application 목록 조회 (하드코딩: user id = 1)
+		List<Application> applications = applicationRepository.findByOwnerUserId(DEFAULT_OWNER_USER_ID);
 		
 		List<ContainerListResponseDto.ContainerInfo> containerInfos = new ArrayList<>();
 		int runningCount = 0;
