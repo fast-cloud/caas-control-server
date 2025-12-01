@@ -39,18 +39,35 @@ public class ContainerService {
 
 	@Transactional
 	public ContainerCreateResponseDto createContainer(ContainerCreateRequestDto request) {
+		log.info("=== Container Creation Started ===");
+		log.info("Request: clusterName={}, imageLink={}, externalPort={}, internalPort={}", 
+				request.getClusterName(), request.getImageLink(), request.getExternalPort(), request.getInternalPort());
+		
 		String containerId = UUID.randomUUID().toString();
 		String deploymentName = request.getClusterName() + "-" + containerId.substring(0, 8);
 		String serviceName = deploymentName + "-svc";
 		String ingressName = deploymentName + "-ingress";
+		
+		log.info("Generated names: containerId={}, deploymentName={}, serviceName={}, ingressName={}", 
+				containerId, deploymentName, serviceName, ingressName);
 
 		try {
 			// Kubernetes 리소스 생성
+			log.info("Step 1/3: Creating Deployment...");
 			createDeployment(deploymentName, request.getImageLink(), request.getInternalPort());
+			
+			log.info("Step 2/3: Creating Service...");
 			createService(serviceName, deploymentName, request.getInternalPort());
+			
+			log.info("Step 3/3: Creating Ingress...");
 			createIngress(ingressName, serviceName, request.getClusterName(), request.getInternalPort());
+			
+			// 실제로 생성되었는지 확인
+			log.info("Step 4/4: Verifying resources exist...");
+			verifyResourceExists(deploymentName, serviceName, ingressName);
 
 			// DB에 Application 저장
+			log.info("Step 5/6: Saving Application to database...");
 			Application application = new Application();
 			application.setAppId(containerId);
 			application.setAppName(request.getClusterName());
@@ -61,8 +78,10 @@ public class ContainerService {
 			application.setCachedStatus("PENDING");
 			
 			application = applicationRepository.save(application);
+			log.info("Application saved: appId={}, appName={}", application.getAppId(), application.getAppName());
 
 			// DB에 Config 저장
+			log.info("Step 6/6: Saving Config to database...");
 			Config config = new Config();
 			config.setConfigId(UUID.randomUUID().toString());
 			config.setApplication(application);
@@ -71,8 +90,11 @@ public class ContainerService {
 			config.setInternalPort(request.getInternalPort());
 			
 			configRepository.save(config);
+			log.info("Config saved: configId={}, imageLink={}, ports={}/{}", 
+					config.getConfigId(), config.getImageLink(), config.getExternalPort(), config.getInternalPort());
 
-			log.info("Container created successfully. ContainerId: {}, Deployment: {}, Service: {}, Ingress: {}", 
+			log.info("=== Container Creation Completed Successfully ===");
+			log.info("ContainerId: {}, Deployment: {}, Service: {}, Ingress: {}", 
 					containerId, deploymentName, serviceName, ingressName);
 
 			return ContainerCreateResponseDto.builder()
@@ -88,12 +110,31 @@ public class ContainerService {
 					.build();
 
 		} catch (ApiException e) {
-			log.error("Failed to create container. Error: {}", e.getMessage(), e);
-			throw new RuntimeException("컨테이너 생성 중 오류가 발생했습니다: " + e.getMessage(), e);
+			log.error("=== Container Creation Failed ===");
+			log.error("ApiException Details:");
+			log.error("  Code: {}", e.getCode());
+			log.error("  Message: {}", e.getMessage());
+			log.error("  Response Body: {}", e.getResponseBody());
+			log.error("  Response Headers: {}", e.getResponseHeaders());
+			if (e.getCause() != null) {
+				log.error("  Cause: {}", e.getCause().getMessage(), e.getCause());
+			}
+			log.error("Full stack trace:", e);
+			throw new RuntimeException("컨테이너 생성 중 오류가 발생했습니다: " + e.getMessage() + 
+					" (HTTP " + e.getCode() + ")", e);
+		} catch (Exception e) {
+			log.error("=== Container Creation Failed with Unexpected Error ===");
+			log.error("Error Type: {}", e.getClass().getName());
+			log.error("Error Message: {}", e.getMessage());
+			log.error("Full stack trace:", e);
+			throw new RuntimeException("컨테이너 생성 중 예상치 못한 오류가 발생했습니다: " + e.getMessage(), e);
 		}
 	}
 
 	private void createDeployment(String deploymentName, String imageLink, Integer internalPort) throws ApiException {
+		log.info("Creating Deployment: name={}, namespace={}, image={}, port={}", 
+				deploymentName, DEFAULT_NAMESPACE, imageLink, internalPort);
+		
 		AppsV1Api appsV1Api = new AppsV1Api(apiClient);
 
 		V1Deployment deployment = new V1Deployment()
@@ -121,11 +162,34 @@ public class ContainerService {
 														.imagePullPolicy("IfNotPresent")
 										)))));
 
-		appsV1Api.createNamespacedDeployment(DEFAULT_NAMESPACE, deployment);
-		log.info("Deployment created: {}", deploymentName);
+		try {
+			log.info("Calling Kubernetes API: createNamespacedDeployment(namespace={}, name={})", 
+					DEFAULT_NAMESPACE, deploymentName);
+			V1Deployment created = appsV1Api.createNamespacedDeployment(DEFAULT_NAMESPACE, deployment)
+					.execute();
+			
+			if (created != null && created.getMetadata() != null) {
+				log.info("✓ Deployment created successfully: name={}, namespace={}, uid={}, creationTimestamp={}", 
+						deploymentName, DEFAULT_NAMESPACE, created.getMetadata().getUid(), 
+						created.getMetadata().getCreationTimestamp());
+			} else {
+				log.error("✗ Deployment creation returned null or empty metadata");
+				throw new ApiException(500, "Deployment creation returned null");
+			}
+		} catch (ApiException e) {
+			log.error("✗ Deployment creation failed:");
+			log.error("  Name: {}, Namespace: {}", deploymentName, DEFAULT_NAMESPACE);
+			log.error("  Error Code: {}", e.getCode());
+			log.error("  Error Message: {}", e.getMessage());
+			log.error("  Response Body: {}", e.getResponseBody());
+			throw e;
+		}
 	}
 
 	private void createService(String serviceName, String deploymentName, Integer internalPort) throws ApiException {
+		log.info("Creating Service: name={}, namespace={}, selector={}, port={}", 
+				serviceName, DEFAULT_NAMESPACE, deploymentName, internalPort);
+		
 		CoreV1Api coreV1Api = new CoreV1Api(apiClient);
 
 		V1Service service = new V1Service()
@@ -145,15 +209,40 @@ public class ContainerService {
 										.protocol("TCP")
 						)));
 
-		coreV1Api.createNamespacedService(DEFAULT_NAMESPACE, service);
-		log.info("Service created: {}", serviceName);
+		try {
+			log.info("Calling Kubernetes API: createNamespacedService(namespace={}, name={})", 
+					DEFAULT_NAMESPACE, serviceName);
+			V1Service created = coreV1Api.createNamespacedService(DEFAULT_NAMESPACE, service)
+					.execute();
+			
+			if (created != null && created.getMetadata() != null) {
+				log.info("✓ Service created successfully: name={}, namespace={}, uid={}, creationTimestamp={}", 
+						serviceName, DEFAULT_NAMESPACE, created.getMetadata().getUid(), 
+						created.getMetadata().getCreationTimestamp());
+			} else {
+				log.error("✗ Service creation returned null or empty metadata");
+				throw new ApiException(500, "Service creation returned null");
+			}
+		} catch (ApiException e) {
+			log.error("✗ Service creation failed:");
+			log.error("  Name: {}, Namespace: {}", serviceName, DEFAULT_NAMESPACE);
+			log.error("  Error Code: {}", e.getCode());
+			log.error("  Error Message: {}", e.getMessage());
+			log.error("  Response Body: {}", e.getResponseBody());
+			throw e;
+		}
 	}
 
 	private void createIngress(String ingressName, String serviceName, String clusterName, Integer servicePort) throws ApiException {
-		NetworkingV1Api networkingV1Api = new NetworkingV1Api(apiClient);
-
 		String sanitizedClusterName = clusterName.toLowerCase().replaceAll("[^a-z0-9-]", "-");
 		String host = sanitizedClusterName + "." + baseDomain;
+		
+		log.info("Creating Ingress: name={}, namespace={}, host={}, service={}, port={}", 
+				ingressName, DEFAULT_NAMESPACE, host, serviceName, servicePort);
+		log.info("Ingress details: clusterName={} -> sanitized={} -> host={}", 
+				clusterName, sanitizedClusterName, host);
+		
+		NetworkingV1Api networkingV1Api = new NetworkingV1Api(apiClient);
 
 		V1Ingress ingress = new V1Ingress()
 				.apiVersion("networking.k8s.io/v1")
@@ -187,8 +276,28 @@ public class ContainerService {
 										)
 						)));
 
-		networkingV1Api.createNamespacedIngress(DEFAULT_NAMESPACE, ingress);
-		log.info("Ingress created: {} with host: {} -> Service: {}:{}", ingressName, host, serviceName, servicePort);
+		try {
+			log.info("Calling Kubernetes API: createNamespacedIngress(namespace={}, name={})", 
+					DEFAULT_NAMESPACE, ingressName);
+			V1Ingress created = networkingV1Api.createNamespacedIngress(DEFAULT_NAMESPACE, ingress)
+					.execute();
+			
+			if (created != null && created.getMetadata() != null) {
+				log.info("✓ Ingress created successfully: name={}, namespace={}, host={}, uid={}, creationTimestamp={}", 
+						ingressName, DEFAULT_NAMESPACE, host, created.getMetadata().getUid(), 
+						created.getMetadata().getCreationTimestamp());
+			} else {
+				log.error("✗ Ingress creation returned null or empty metadata");
+				throw new ApiException(500, "Ingress creation returned null");
+			}
+		} catch (ApiException e) {
+			log.error("✗ Ingress creation failed:");
+			log.error("  Name: {}, Namespace: {}, Host: {}", ingressName, DEFAULT_NAMESPACE, host);
+			log.error("  Error Code: {}", e.getCode());
+			log.error("  Error Message: {}", e.getMessage());
+			log.error("  Response Body: {}", e.getResponseBody());
+			throw e;
+		}
 	}
 
 	public ContainerListResponseDto getContainers() {
@@ -246,6 +355,109 @@ public class ContainerService {
 				.build();
 	}
 
+	private void verifyResourceExists(String deploymentName, String serviceName, String ingressName) {
+		log.info("Starting resource verification: deployment={}, service={}, ingress={}, namespace={}", 
+				deploymentName, serviceName, ingressName, DEFAULT_NAMESPACE);
+		
+		try {
+			log.info("Waiting 500ms for resources to be created...");
+			Thread.sleep(500); // 리소스가 생성될 시간 대기
+			
+			AppsV1Api appsV1Api = new AppsV1Api(apiClient);
+			CoreV1Api coreV1Api = new CoreV1Api(apiClient);
+			NetworkingV1Api networkingV1Api = new NetworkingV1Api(apiClient);
+			
+			// Deployment 확인
+			log.info("Verifying Deployment: name={}, namespace={}", deploymentName, DEFAULT_NAMESPACE);
+			try {
+				V1Deployment deployment = appsV1Api.readNamespacedDeployment(deploymentName, DEFAULT_NAMESPACE).execute();
+				if (deployment != null && deployment.getMetadata() != null) {
+					log.info("✓ Verified: Deployment exists - name={}, namespace={}, uid={}, creationTimestamp={}", 
+							deploymentName, DEFAULT_NAMESPACE, deployment.getMetadata().getUid(), 
+							deployment.getMetadata().getCreationTimestamp());
+					if (deployment.getStatus() != null) {
+						log.info("  Deployment status: replicas={}, readyReplicas={}, availableReplicas={}", 
+								deployment.getStatus().getReplicas(), 
+								deployment.getStatus().getReadyReplicas(),
+								deployment.getStatus().getAvailableReplicas());
+					}
+				} else {
+					log.error("✗ Deployment verification failed: API returned null or empty metadata");
+					throw new RuntimeException("Deployment 생성 확인 실패: API returned null");
+				}
+			} catch (ApiException e) {
+				log.error("✗ Deployment NOT FOUND:");
+				log.error("  Name: {}, Namespace: {}", deploymentName, DEFAULT_NAMESPACE);
+				log.error("  Error Code: {}", e.getCode());
+				log.error("  Error Message: {}", e.getMessage());
+				log.error("  Response Body: {}", e.getResponseBody());
+				throw new RuntimeException("Deployment 생성 확인 실패: " + e.getMessage() + " (Code: " + e.getCode() + ")", e);
+			}
+			
+			// Service 확인
+			log.info("Verifying Service: name={}, namespace={}", serviceName, DEFAULT_NAMESPACE);
+			try {
+				V1Service service = coreV1Api.readNamespacedService(serviceName, DEFAULT_NAMESPACE).execute();
+				if (service != null && service.getMetadata() != null) {
+					log.info("✓ Verified: Service exists - name={}, namespace={}, uid={}, creationTimestamp={}", 
+							serviceName, DEFAULT_NAMESPACE, service.getMetadata().getUid(), 
+							service.getMetadata().getCreationTimestamp());
+					if (service.getSpec() != null) {
+						log.info("  Service spec: type={}, clusterIP={}", 
+								service.getSpec().getType(), service.getSpec().getClusterIP());
+					}
+				} else {
+					log.error("✗ Service verification failed: API returned null or empty metadata");
+					throw new RuntimeException("Service 생성 확인 실패: API returned null");
+				}
+			} catch (ApiException e) {
+				log.error("✗ Service NOT FOUND:");
+				log.error("  Name: {}, Namespace: {}", serviceName, DEFAULT_NAMESPACE);
+				log.error("  Error Code: {}", e.getCode());
+				log.error("  Error Message: {}", e.getMessage());
+				log.error("  Response Body: {}", e.getResponseBody());
+				throw new RuntimeException("Service 생성 확인 실패: " + e.getMessage() + " (Code: " + e.getCode() + ")", e);
+			}
+			
+			// Ingress 확인
+			log.info("Verifying Ingress: name={}, namespace={}", ingressName, DEFAULT_NAMESPACE);
+			try {
+				V1Ingress ingress = networkingV1Api.readNamespacedIngress(ingressName, DEFAULT_NAMESPACE).execute();
+				if (ingress != null && ingress.getMetadata() != null) {
+					log.info("✓ Verified: Ingress exists - name={}, namespace={}, uid={}, creationTimestamp={}", 
+							ingressName, DEFAULT_NAMESPACE, ingress.getMetadata().getUid(), 
+							ingress.getMetadata().getCreationTimestamp());
+					if (ingress.getSpec() != null && ingress.getSpec().getRules() != null) {
+						ingress.getSpec().getRules().forEach(rule -> 
+							log.info("  Ingress rule: host={}", rule.getHost()));
+					}
+				} else {
+					log.error("✗ Ingress verification failed: API returned null or empty metadata");
+					throw new RuntimeException("Ingress 생성 확인 실패: API returned null");
+				}
+			} catch (ApiException e) {
+				log.error("✗ Ingress NOT FOUND:");
+				log.error("  Name: {}, Namespace: {}", ingressName, DEFAULT_NAMESPACE);
+				log.error("  Error Code: {}", e.getCode());
+				log.error("  Error Message: {}", e.getMessage());
+				log.error("  Response Body: {}", e.getResponseBody());
+				throw new RuntimeException("Ingress 생성 확인 실패: " + e.getMessage() + " (Code: " + e.getCode() + ")", e);
+			}
+			
+			log.info("✓ All resources verified successfully");
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			log.error("✗ Verification interrupted", e);
+			throw new RuntimeException("리소스 검증 중단됨", e);
+		} catch (RuntimeException e) {
+			log.error("✗ Verification failed with RuntimeException", e);
+			throw e;
+		} catch (Exception e) {
+			log.error("✗ Verification failed with unexpected error", e);
+			throw new RuntimeException("리소스 검증 중 예상치 못한 오류 발생", e);
+		}
+	}
+
 	private String getDeploymentStatus(String namespace, String deploymentName) {
 		try {
 			AppsV1Api appsV1Api = new AppsV1Api(apiClient);
@@ -273,7 +485,7 @@ public class ContainerService {
 			}
 		} catch (ApiException e) {
 			log.warn("Failed to get deployment status for {} in namespace {}: {}", deploymentName, namespace, e.getMessage());
-			// Deployment가 없거나 조회 실패 시 STOPPED로 간주
+			// Deployment가 없거나 조회 실패 시 STOPPED로 간주./
 			return "STOPPED";
 		}
 	}
