@@ -44,23 +44,31 @@ public class ContainerService {
 				request.getClusterName(), request.getImageLink(), request.getExternalPort(), request.getInternalPort());
 		
 		String containerId = UUID.randomUUID().toString();
-		String deploymentName = request.getClusterName() + "-" + containerId.substring(0, 8);
+		String sanitizedName = request.getClusterName().toLowerCase().replaceAll("[^a-z0-9-]", "-");
+		String deploymentName = sanitizedName + "-" + containerId.substring(0, 8);
 		String serviceName = deploymentName + "-svc";
 		String ingressName = deploymentName + "-ingress";
 		
 		log.info("Generated names: containerId={}, deploymentName={}, serviceName={}, ingressName={}", 
 				containerId, deploymentName, serviceName, ingressName);
 
+		boolean deploymentCreated = false;
+		boolean serviceCreated = false;
+		boolean ingressCreated = false;
+
 		try {
 			// Kubernetes 리소스 생성
 			log.info("Step 1/3: Creating Deployment...");
 			createDeployment(deploymentName, request.getImageLink(), request.getInternalPort());
-			
+			deploymentCreated = true;
+
 			log.info("Step 2/3: Creating Service...");
 			createService(serviceName, deploymentName, request.getInternalPort());
-			
+			serviceCreated = true;
+
 			log.info("Step 3/3: Creating Ingress...");
 			createIngress(ingressName, serviceName, request.getClusterName(), request.getInternalPort());
+			ingressCreated = true;
 			
 			// 실제로 생성되었는지 확인
 			log.info("Step 4/4: Verifying resources exist...");
@@ -110,6 +118,7 @@ public class ContainerService {
 					.build();
 
 		} catch (ApiException e) {
+			cleanupK8sResources(deploymentName, deploymentCreated, serviceName, serviceCreated, ingressName, ingressCreated);
 			log.error("=== Container Creation Failed ===");
 			log.error("ApiException Details:");
 			log.error("  Code: {}", e.getCode());
@@ -120,9 +129,10 @@ public class ContainerService {
 				log.error("  Cause: {}", e.getCause().getMessage(), e.getCause());
 			}
 			log.error("Full stack trace:", e);
-			throw new RuntimeException("컨테이너 생성 중 오류가 발생했습니다: " + e.getMessage() + 
+			throw new RuntimeException("컨테이너 생성 중 오류가 발생했습니다: " + e.getMessage() +
 					" (HTTP " + e.getCode() + ")", e);
 		} catch (Exception e) {
+			cleanupK8sResources(deploymentName, deploymentCreated, serviceName, serviceCreated, ingressName, ingressCreated);
 			log.error("=== Container Creation Failed with Unexpected Error ===");
 			log.error("Error Type: {}", e.getClass().getName());
 			log.error("Error Message: {}", e.getMessage());
@@ -300,6 +310,37 @@ public class ContainerService {
 		}
 	}
 
+	private void cleanupK8sResources(String deploymentName, boolean deploymentCreated,
+			String serviceName, boolean serviceCreated,
+			String ingressName, boolean ingressCreated) {
+		log.warn("=== Starting K8s resource cleanup ===");
+		if (ingressCreated) {
+			try {
+				new NetworkingV1Api(apiClient).deleteNamespacedIngress(ingressName, DEFAULT_NAMESPACE).execute();
+				log.info("Cleanup: Ingress deleted - {}", ingressName);
+			} catch (ApiException e) {
+				log.error("Cleanup: Failed to delete Ingress {}: {} ({})", ingressName, e.getMessage(), e.getCode());
+			}
+		}
+		if (serviceCreated) {
+			try {
+				new CoreV1Api(apiClient).deleteNamespacedService(serviceName, DEFAULT_NAMESPACE).execute();
+				log.info("Cleanup: Service deleted - {}", serviceName);
+			} catch (ApiException e) {
+				log.error("Cleanup: Failed to delete Service {}: {} ({})", serviceName, e.getMessage(), e.getCode());
+			}
+		}
+		if (deploymentCreated) {
+			try {
+				new AppsV1Api(apiClient).deleteNamespacedDeployment(deploymentName, DEFAULT_NAMESPACE).execute();
+				log.info("Cleanup: Deployment deleted - {}", deploymentName);
+			} catch (ApiException e) {
+				log.error("Cleanup: Failed to delete Deployment {}: {} ({})", deploymentName, e.getMessage(), e.getCode());
+			}
+		}
+	}
+
+	@Transactional(readOnly = true)
 	public ContainerListResponseDto getContainers() {
 		// DB에서 사용자의 Application 목록 조회 (하드코딩: user id = 1)
 		List<Application> applications = applicationRepository.findByOwnerUserId(DEFAULT_OWNER_USER_ID);
